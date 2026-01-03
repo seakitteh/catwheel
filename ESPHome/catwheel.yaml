@@ -1,0 +1,645 @@
+################################################################################
+# ESPHome Cat Wheel Activity Tracker
+#
+# A hobby project to monitor cat exercise wheel activity with real-time speed,
+# distance, and session tracking. Built over holiday break with Home Assistant
+# and ESPHome.
+#
+# Project Info + Helpful Tips:
+#   - https://github.com/seakitteh/catwheel
+#
+# Inspiration & Credits:
+#   - Sarah Dalrymple: https://sarahdal.github.io/arduino-esp32/2025/02/11/CatWheel.html
+#
+# Data Flow:
+#   ESP32 → Home Assistant (ESPHome API) → InfluxDB → Grafana
+#
+################################################################################
+
+################################################################################
+# SUBSTITUTIONS - Configurable Constants
+################################################################################
+substitutions:
+  # Device identification
+  device_name: catwheel
+  friendly_name: "One Fast Cat Wheel Speedo"
+
+  # Wheel calibration
+  # Measure inner diameter of wheel and calculate: circumference = π × diameter
+  # Example: 1.08m diameter = 3.4m circumference / 4 magnets = 0.85m per rotation
+  wheel_circumference: "0.9582"  # meters per magnet pass
+
+  # Sensor tuning
+  bounce_threshold_ms: "150"      # Minimum ms between magnet passes (debounce)
+  speed_timeout_ms: "5000"        # ms before speed resets to 0
+  max_speed_limit_mph: "20.0"     # Reject speeds above this (error detection)
+  running_threshold_mph: "0.45"   # Speed threshold to consider cat "running"
+  session_cooldown_ms: "30000"    # ms before counting a new session (30s default)
+
+  # GPIO Pin assignments
+  reed_switch_pin: "GPIO1"        # Reed switch sensor input
+  # Note: Display pins below are optional - not used if no LCD display connected
+  display_backlight_pin: "GPIO5"  # LCD backlight control (optional)
+  display_enable_pin: "GPIO4"     # LCD enable control (optional)
+
+################################################################################
+# ESPHOME CORE CONFIGURATION
+################################################################################
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  # Automatically run setup wizard on first boot
+  on_boot:
+    priority: 600
+    then:
+      - logger.log:
+          format: "Cat Wheel Tracker initialized - Ready to monitor!"
+          level: INFO
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: arduino
+    version: recommended
+
+################################################################################
+# WIFI & CONNECTIVITY
+################################################################################
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Fallback hotspot if WiFi connection fails
+  ap:
+    ssid: "CatWheel Hotspot"
+    password: !secret fallback_password
+  # Power saving - adjust based on your needs
+  power_save_mode: light
+
+captive_portal:
+
+logger:
+  # Set to DEBUG for troubleshooting, INFO for normal operation
+  level: INFO
+  # Reduce log spam from specific components
+  logs:
+    component: WARN
+
+api:
+  # Enable Home Assistant integration
+  # Data is sent to HA via ESPHome API, then stored in InfluxDB
+  # No encryption key required - uses Home Assistant's native discovery
+
+ota:
+  - platform: esphome
+
+################################################################################
+# TIME SYNCHRONIZATION
+################################################################################
+time:
+  - platform: homeassistant
+    id: homeassistant_time
+    # Used for daily stat reset at midnight
+    on_time:
+      - hours: 0
+        minutes: 0
+        seconds: 0
+        then:
+          - logger.log:
+              format: "Midnight reached - Daily stats will reset on next activity"
+              level: INFO
+
+################################################################################
+# GLOBAL VARIABLES - Persistent State
+################################################################################
+globals:
+  # Timing variables
+  - id: last_rotation_time_persisted
+    type: uint32_t
+    restore_value: yes
+    initial_value: '0'
+    # Stores timestamp of last magnet pass (survives power cycle)
+
+  - id: last_rotation_time
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+    # Temporary timestamp for speed calculation (resets on power cycle)
+
+  - id: last_session_date
+    type: int
+    restore_value: yes
+    initial_value: '0'
+    # Day of year for daily stat reset detection
+
+  # Wheel configuration
+  - id: wheel_circumference
+    type: float
+    initial_value: ${wheel_circumference}
+    # Distance traveled per magnet pass (meters)
+
+  # Distance tracking
+  - id: distance_today_val
+    type: float
+    restore_value: yes
+    initial_value: '0.0'
+    # Distance traveled today (meters)
+
+  - id: distance_total_val
+    type: float
+    restore_value: yes
+    initial_value: '0.0'
+    # Total distance since first use (meters)
+
+  - id: distance_week_val
+    type: float
+    restore_value: yes
+    initial_value: '0.0'
+    # Distance in past 7 days (meters)
+
+  - id: distance_month_val
+    type: float
+    restore_value: yes
+    initial_value: '0.0'
+    # Distance in past 30 days (meters)
+
+  # Speed tracking
+  - id: speed_max_val
+    type: float
+    restore_value: yes
+    initial_value: '0.0'
+    # Maximum speed recorded (mph)
+
+  # Session tracking
+  - id: session_count_today
+    type: int
+    restore_value: yes
+    initial_value: '0'
+    # Number of running sessions today
+
+  - id: in_session
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+    # Flag to track if currently in a running session
+
+  - id: current_session_start
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+    # Timestamp when current session started
+
+  - id: last_session_duration
+    type: uint32_t
+    restore_value: yes
+    initial_value: '0'
+    # Duration of last session (seconds)
+
+  - id: longest_session_duration
+    type: uint32_t
+    restore_value: yes
+    initial_value: '0'
+    # Longest session duration ever (seconds)
+
+  - id: last_session_end_time
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+    # Timestamp of last session end (for cooldown period)
+
+################################################################################
+# BINARY SENSORS - Digital Input Detection
+################################################################################
+binary_sensor:
+  # Reed switch sensor - detects magnet passes
+  - platform: gpio
+    pin:
+      number: ${reed_switch_pin}
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "Wheel Sensor"
+    id: reed_switch
+    device_class: motion
+    # Debounce filters to prevent false triggers
+    filters:
+      - delayed_on: 10ms    # Require 10ms of continuous signal
+      - delayed_off: 100ms  # Require 100ms of no signal before off
+
+    on_press:
+      then:
+        - lambda: |-
+            // Static variable persists between calls
+            static uint32_t last_rotation = 0;
+            uint32_t now = millis();
+            uint32_t delta_ms = now - last_rotation;
+
+            // BOUNCE DETECTION
+            // Reject if magnet passed too quickly (physical impossibility)
+            if (last_rotation != 0 && delta_ms < ${bounce_threshold_ms}) {
+              ESP_LOGW("catwheel", "Bounce rejected: %dms (too fast!)", delta_ms);
+              return;
+            }
+
+            // SPEED CALCULATION
+            if (last_rotation != 0) {
+              float delta_sec = delta_ms / 1000.0;
+              float speed_ms = id(wheel_circumference) / delta_sec;
+              float mph = speed_ms * 2.23694;  // Convert m/s to mph
+
+              // SPEED VALIDATION
+              // Reject unrealistic speeds (sensor error detection)
+              if (mph < ${max_speed_limit_mph}) {
+                id(speed_sensor).publish_state(mph);
+                ESP_LOGI("catwheel", "Speed: %.2f mph (delta: %dms)", mph, delta_ms);
+
+                // Update max speed if new record
+                if (mph > id(speed_max_val)) {
+                  id(speed_max_val) = mph;
+                  id(speed_max).publish_state(mph);
+                  ESP_LOGI("catwheel", "🏃 New max speed: %.2f mph!", mph);
+                }
+              } else {
+                ESP_LOGW("catwheel", "Unrealistic speed rejected: %.2f mph (delta: %dms)", mph, delta_ms);
+              }
+            }
+
+            // Update rotation timestamp
+            last_rotation = now;
+
+            // DISTANCE TRACKING
+            // Add circumference to both daily and total distance
+            id(distance_today_val) += id(wheel_circumference);
+            id(distance_total_val) += id(wheel_circumference);
+            id(distance_week_val) += id(wheel_circumference);
+            id(distance_month_val) += id(wheel_circumference);
+
+            // Convert meters to miles and publish
+            id(distance_today).publish_state(id(distance_today_val) * 0.000621371);
+            id(odometer_miles).publish_state(id(distance_total_val) * 0.000621371);
+            id(distance_week).publish_state(id(distance_week_val) * 0.000621371);
+            id(distance_month).publish_state(id(distance_month_val) * 0.000621371);
+
+            // Update persistent timestamp
+            id(last_rotation_time) = now;
+            id(last_rotation_time_persisted) = now;
+
+  # Template sensor - detects if cat is actively running
+  - platform: template
+    name: "Cat Running"
+    id: cat_running
+    device_class: running
+    # Cat is considered "running" if speed exceeds threshold
+    lambda: |-
+      return id(speed_sensor).state > ${running_threshold_mph};
+
+    on_press:
+      then:
+        - lambda: |-
+            // Start of running session
+            if (!id(in_session)) {
+              uint32_t now = millis();
+              uint32_t time_since_last_session = now - id(last_session_end_time);
+
+              // Only count as new session if cooldown period has passed
+              // This prevents counting brief pauses as separate sessions
+              if (id(last_session_end_time) == 0 || time_since_last_session > ${session_cooldown_ms}) {
+                id(session_count_today)++;
+                id(sessions_today).publish_state(id(session_count_today));
+                ESP_LOGI("catwheel", "🐱 Session #%d started!", id(session_count_today));
+              } else {
+                ESP_LOGD("catwheel", "Resuming session (only %lums since last end, need ${session_cooldown_ms}ms)", time_since_last_session);
+              }
+
+              id(in_session) = true;
+              id(current_session_start) = now;
+            }
+
+    on_release:
+      then:
+        - lambda: |-
+            // End of running session
+            if (id(in_session)) {
+              id(in_session) = false;
+              id(last_session_end_time) = millis();  // Track when session ended
+              uint32_t duration_sec = (millis() - id(current_session_start)) / 1000;
+              id(last_session_duration) = duration_sec;
+              id(last_session_duration_sensor).publish_state(duration_sec);
+
+              // Check if this is the longest session
+              if (duration_sec > id(longest_session_duration)) {
+                id(longest_session_duration) = duration_sec;
+                id(longest_session_sensor).publish_state(duration_sec);
+                ESP_LOGI("catwheel", "🏆 New longest session: %lus!", duration_sec);
+              }
+
+              ESP_LOGI("catwheel", "Session ended (duration: %lus)", duration_sec);
+            }
+
+################################################################################
+# TEXT SENSORS - String Output
+################################################################################
+text_sensor:
+  # Human-readable "time since last movement" display
+  - platform: template
+    name: "Last Movement"
+    id: time_since_last_move
+    update_interval: 10s
+    # Updates every 10 seconds to show elapsed time
+    lambda: |-
+      uint32_t now = millis();
+      uint32_t last = id(last_rotation_time_persisted);
+
+      if (last == 0) {
+        return {"Never"};
+      }
+
+      uint32_t diff = (now - last) / 1000;  // Convert to seconds
+
+      if (diff < 60) {
+        // Less than 1 minute - show seconds
+        char buffer[16];
+        snprintf(buffer, sizeof(buffer), "%lus ago", diff);
+        return {buffer};
+      } else if (diff < 3600) {
+        // Less than 1 hour - show minutes
+        char buffer[16];
+        snprintf(buffer, sizeof(buffer), "%lum ago", diff / 60);
+        return {buffer};
+      } else {
+        // 1 hour or more - show hours
+        char buffer[16];
+        snprintf(buffer, sizeof(buffer), "%luh ago", diff / 3600);
+        return {buffer};
+      }
+
+################################################################################
+# SENSORS - Numeric Values
+################################################################################
+sensor:
+  # Current speed in mph
+  - platform: template
+    name: "Cat Wheel Speed"
+    id: speed_sensor
+    unit_of_measurement: "mph"
+    accuracy_decimals: 2
+    icon: "mdi:speedometer"
+    update_interval: never  # Updated only when magnet passes
+    lambda: |-
+      return 0.0;
+
+  # Distance traveled today (miles)
+  - platform: template
+    name: "Distance Today"
+    id: distance_today
+    unit_of_measurement: "mi"
+    accuracy_decimals: 2
+    icon: "mdi:run"
+    update_interval: never  # Updated only when magnet passes
+    lambda: |-
+      return id(distance_today_val) * 0.000621371;  // Convert meters to miles
+
+  # Distance traveled in past 7 days
+  - platform: template
+    name: "Weekly Distance"
+    id: distance_week
+    unit_of_measurement: "mi"
+    accuracy_decimals: 2
+    icon: "mdi:calendar-week"
+    update_interval: never
+    lambda: |-
+      return id(distance_week_val) * 0.000621371;
+
+  # Distance traveled in past 30 days
+  - platform: template
+    name: "Monthly Distance"
+    id: distance_month
+    unit_of_measurement: "mi"
+    accuracy_decimals: 2
+    icon: "mdi:calendar-month"
+    update_interval: never
+    lambda: |-
+      return id(distance_month_val) * 0.000621371;
+
+  # Total distance traveled (odometer)
+  - platform: template
+    name: "Cat Wheel Odometer"
+    id: odometer_miles
+    unit_of_measurement: "mi"
+    accuracy_decimals: 3
+    icon: "mdi:map-marker-distance"
+    update_interval: never  # Updated only when magnet passes
+    lambda: |-
+      return id(distance_total_val) * 0.000621371;  // Convert meters to miles
+
+  # Maximum speed achieved
+  - platform: template
+    name: "Max Speed"
+    id: speed_max
+    unit_of_measurement: "mph"
+    accuracy_decimals: 2
+    icon: "mdi:speedometer"
+    update_interval: never  # Updated only when new max is set
+    lambda: |-
+      return id(speed_max_val);
+
+  # Number of running sessions today
+  - platform: template
+    name: "Sessions Today"
+    id: sessions_today
+    unit_of_measurement: "sessions"
+    accuracy_decimals: 0
+    icon: "mdi:counter"
+    update_interval: never  # Updated only when session starts
+    lambda: |-
+      return id(session_count_today);
+
+  # Current session duration (live updates during session)
+  - platform: template
+    name: "Current Session Duration"
+    id: current_session_duration
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+    icon: "mdi:timer"
+    update_interval: 1s
+    lambda: |-
+      if (id(in_session)) {
+        return (millis() - id(current_session_start)) / 1000.0;
+      }
+      return 0.0;
+
+  # Last session duration
+  - platform: template
+    name: "Last Session Duration"
+    id: last_session_duration_sensor
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+    icon: "mdi:timer-outline"
+    update_interval: never
+    lambda: |-
+      return id(last_session_duration);
+
+  # Longest session ever recorded
+  - platform: template
+    name: "Longest Session"
+    id: longest_session_sensor
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+    icon: "mdi:trophy"
+    update_interval: never
+    lambda: |-
+      return id(longest_session_duration);
+
+################################################################################
+# BUTTONS - Manual Controls in Home Assistant
+################################################################################
+button:
+  # Reset daily statistics only
+  - platform: template
+    name: "Reset Daily Stats"
+    icon: "mdi:restart"
+    on_press:
+      - lambda: |-
+          id(distance_today_val) = 0.0;
+          id(speed_max_val) = 0.0;
+          id(session_count_today) = 0;
+          id(distance_today).publish_state(0.0);
+          id(speed_max).publish_state(0.0);
+          id(sessions_today).publish_state(0);
+          ESP_LOGI("catwheel", "Daily stats reset");
+
+  # Reset weekly stats
+  - platform: template
+    name: "Reset Weekly Stats"
+    icon: "mdi:calendar-week"
+    on_press:
+      - lambda: |-
+          id(distance_week_val) = 0.0;
+          id(distance_week).publish_state(0.0);
+          ESP_LOGI("catwheel", "Weekly stats reset");
+
+  # Reset monthly stats
+  - platform: template
+    name: "Reset Monthly Stats"
+    icon: "mdi:calendar-month"
+    on_press:
+      - lambda: |-
+          id(distance_month_val) = 0.0;
+          id(distance_month).publish_state(0.0);
+          ESP_LOGI("catwheel", "Monthly stats reset");
+
+  # Reset all statistics (use with caution!)
+  - platform: template
+    name: "Reset All Stats"
+    icon: "mdi:delete-forever"
+    on_press:
+      - lambda: |-
+          id(distance_today_val) = 0.0;
+          id(distance_week_val) = 0.0;
+          id(distance_month_val) = 0.0;
+          id(distance_total_val) = 0.0;
+          id(speed_max_val) = 0.0;
+          id(session_count_today) = 0;
+          id(last_rotation_time_persisted) = 0;
+          id(last_rotation_time) = 0;
+          id(last_session_duration) = 0;
+          id(longest_session_duration) = 0;
+          id(distance_today).publish_state(0.0);
+          id(distance_week).publish_state(0.0);
+          id(distance_month).publish_state(0.0);
+          id(odometer_miles).publish_state(0.0);
+          id(speed_max).publish_state(0.0);
+          id(speed_sensor).publish_state(0.0);
+          id(sessions_today).publish_state(0);
+          id(last_session_duration_sensor).publish_state(0);
+          id(longest_session_sensor).publish_state(0);
+          id(time_since_last_move).publish_state("Never");
+          ESP_LOGI("catwheel", "⚠️  ALL stats reset to zero");
+
+################################################################################
+# INTERVALS - Periodic Tasks
+################################################################################
+interval:
+  # Speed timeout - reset speed to 0 if no activity for 5 seconds
+  - interval: 500ms
+    then:
+      - lambda: |-
+          uint32_t now = millis();
+          // If last rotation was more than timeout ago, reset speed to 0
+          if (id(last_rotation_time) != 0 && now - id(last_rotation_time) > ${speed_timeout_ms}) {
+            if (id(speed_sensor).state != 0.0) {
+              id(speed_sensor).publish_state(0.0);
+              ESP_LOGD("catwheel", "Speed set to 0 (timeout)");
+            }
+          }
+
+  # Daily reset check - reset session counter at midnight
+  - interval: 60s
+    then:
+      - lambda: |-
+          auto time = id(homeassistant_time).now();
+          if (!time.is_valid()) return;
+
+          int today = time.day_of_year;
+
+          // Check if day has changed
+          if (id(last_session_date) != 0 && id(last_session_date) != today) {
+            id(session_count_today) = 0;
+            id(sessions_today).publish_state(0);
+            ESP_LOGI("catwheel", "New day - session counter reset");
+          }
+          id(last_session_date) = today;
+
+################################################################################
+# SWITCHES - GPIO Control (Optional)
+################################################################################
+switch:
+  # LCD backlight control (optional - requires LCD display)
+  # NOTE: Display support removed in favor of Grafana dashboards
+  # These pins are available for future use or other purposes
+  - platform: gpio
+    pin:
+      number: ${display_backlight_pin}
+      inverted: true
+    id: backlight_off
+    name: "Display Backlight"
+    restore_mode: ALWAYS_OFF
+    internal: true
+
+  # LCD enable control (optional - requires LCD display)
+  - platform: gpio
+    pin:
+      number: ${display_enable_pin}
+      inverted: false
+    id: display_enable
+    name: "Display Enable"
+    restore_mode: ALWAYS_OFF
+    internal: true
+
+################################################################################
+# CONFIGURATION NOTES
+################################################################################
+#
+# WHEEL CALIBRATION (Required):
+#   1. Measure inner diameter of wheel
+#   2. Calculate: circumference = π × diameter ÷ number_of_magnets
+#   3. Update wheel_circumference substitution above
+#   Example: 1.08m diameter → 3.4m ÷ 4 magnets = 0.85m
+#
+# SENSOR TUNING (Optional):
+#   - bounce_threshold_ms: Increase if false speed spikes occur
+#   - speed_timeout_ms: How long before speed resets to 0
+#   - max_speed_limit_mph: Reject unrealistic speeds above this
+#   - running_threshold_mph: Minimum speed to count as "running"
+#   - session_cooldown_ms: Prevent counting brief pauses as new sessions
+#     * Default 30000ms (30 seconds) - increase if cat does stop-and-go running
+#     * If cat pauses < cooldown time, it resumes the same session
+#     * If cat pauses > cooldown time, it counts as a new session
+#
+# WEEKLY/MONTHLY RESETS:
+#   Use manual reset buttons in Home Assistant, or automate with HA:
+#   - Weekly: Trigger "Reset Weekly Stats" every Monday at midnight
+#   - Monthly: Trigger "Reset Monthly Stats" on 1st of month
+#
+# For detailed setup, troubleshooting, and Grafana dashboards:
+#   https://github.com/seakitteh/catwheel
+#
+################################################################################
