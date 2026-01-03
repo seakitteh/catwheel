@@ -164,7 +164,7 @@ The easiest way to get started is to import the pre-built dashboard:
 
 1. Open Grafana (usually at `http://homeassistant.local:3000`)
 2. Go to **Dashboards → New → Import**
-3. Copy the contents of `catwheel-grafana-dashboard.json` from this repository
+3. Copy the contents of `catwheel-dashboard.json` from this repository
 4. Paste it into the "Import via panel json" field
 5. Click **Load**
 6. Select your InfluxDB data source
