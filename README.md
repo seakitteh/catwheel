@@ -7,8 +7,8 @@ A Home Assistant + ESPHome project to monitor your cat's exercise wheel activity
 ## 📸 Project Photos
 
 <p align="center">
-  <img src="images/cat-on-wheel.jpg" width="45%" alt="Cat on wheel with device">
-  <img src="images/cat-on-wheel.gif" width="45%" alt="Cat testing action">
+  <img src="images/cat-on-wheel.jpg" height="400" alt="Cat on wheel with device">
+  <img src="images/cat-on-wheel.gif" height="400" alt="Cat testing action">
 </p>
 
 <p align="center">
@@ -216,7 +216,7 @@ If you prefer to create a dashboard from scratch:
 | Activity Heatmap | Heatmap | Activity by time of day |
 | Sessions Per Day | Time Series | Daily session count |
 
-#### Sample InfluxQL Queries
+#### Sample Grafana Queries
 
 **Current Speed:**
 ```sql
@@ -377,10 +377,6 @@ Without InfluxDB/Grafana, you can still view all data directly in Home Assistant
 4. Create custom Home Assistant cards/dashboards using the entities
 5. Set up automations based on the "Cat Running" binary sensor
 
-## 📸 Project Photos & Videos
-
-<!-- Add photos and videos of your setup here -->
-
 ## 🚀 Future Improvements
 
 The following enhancements are planned:
@@ -424,9 +420,7 @@ Feel free to fork, contribute, or use it as inspiration for your own projects!
 
 ## ☕ Support This Project
 
-If you found this project helpful and want to say thanks, you can buy me a coffee:
-
-**[Buy Me a Coffee](https://buymeacoffee.com/seakitteh)** 
+If you found this project helpful and want to say thanks, you can [buy me a coffee](https://buymeacoffee.com/seakitteh)
 
 ## 📝 License
 
@@ -434,7 +428,7 @@ MIT License - Feel free to adapt and improve this project for your own needs!
 
 ## 🤝 Contributing
 
-Found an improvement or have a suggestion? I'd love to hear from you!
+Found an improvement or have a suggestion?
 
 - Report issues or suggest features
 - Submit pull requests with improvements
