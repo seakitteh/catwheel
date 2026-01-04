@@ -4,13 +4,38 @@ A Home Assistant + ESPHome project to monitor your cat's exercise wheel activity
 
 > **Note:** This is a hobby project I built over the holiday break with the assistance of AI for troubleshooting, YAML optimization, and Grafana dashboard visualizations. I have two adopted tabbies who absolutely love their wheel and use it constantly. I wanted to better understand their exercise habits and follow along on their fitness journey! 🐱
 
+## 📑 Table of Contents
+- [Project Photos](#-project-photos)
+- [Features](#-features)
+- [Prerequisites](#-prerequisites)
+- [Hardware](#-hardware)
+- [Installation](#-installation)
+- [Configuration](#-configuration)
+- [Troubleshooting](#-troubleshooting)
+- [Understanding the Data](#-understanding-the-data)
+- [Future Improvements](#-future-improvements)
+- [Inspiration & Credits](#-inspiration--credits)
+
 ## 📸 Project Photos
 
+### Test Subject
 <p align="center">
-  <img src="images/cat-on-wheel.jpg" height="400" alt="Cat on wheel with device">
-  <img src="images/cat-on-wheel.gif" height="400" alt="Cat testing action">
+  <img src="images/cat-on-wheel.jpeg" width="600" alt="Cat using the exercise wheel">
 </p>
+<p align="center"><em>A very eager test subject</em></p>
 
+### Hardware Setup
+<p align="center">
+  <img src="images/hardware-placement.jpeg" width="600" alt="ESP32 and reed switch sensor placement">
+</p>
+<p align="center"><em>ESP32 microcontroller and reed switch sensor mounted near the wheel</em></p>
+
+<p align="center">
+  <img src="images/magnet-placement.jpeg" width="600" alt="Magnet placement on wheel">
+</p>
+<p align="center"><em>Four magnets placed evenly around the wheel's outer edge for accurate tracking</em></p>
+
+### Grafana Dashboards
 <p align="center">
   <img src="images/grafana-dashboard1.png" width="100%" alt="Grafana dashboard showing real-time metrics">
 </p>
@@ -45,10 +70,10 @@ A Home Assistant + ESPHome project to monitor your cat's exercise wheel activity
 - **ESPHome** - Add-on installed in Home Assistant
 
 ### Optional (for data visualization)
-- **InfluxDB** - Add-on or external instance (for time-series data storage)
-- **Grafana** - Add-on or external instance (for dashboard visualization)
+- **InfluxDB** - Can be installed from the Home Assistant Add-on Store under **Settings → Add-ons**
+- **Grafana** - Can be installed from the Home Assistant Add-on Store under **Settings → Add-ons**. Recommendation: Enable **Add to Sidebar** for easy navigation.
 
-> **Note:** InfluxDB and Grafana are completely optional. The project works perfectly fine with just Home Assistant and ESPHome. You can view real-time data directly in Home Assistant's UI. InfluxDB + Grafana are only needed if you want historical data analysis and custom dashboards.
+> **Note:** InfluxDB and Grafana are optional. The project works perfectly fine with just Home Assistant and ESPHome. You can view real-time data directly in Home Assistant's UI. InfluxDB + Grafana are only needed if you want historical data analysis and custom dashboards. Both can be easily installed directly from within Home Assistant via the Add-on Store.
 
 ### Setup Guides
 
@@ -85,8 +110,9 @@ For a more cost-effective build, consider using the same boards as the inspirati
 > **Note:** I initially purchased the Waveshare board with the integrated display but encountered compatibility issues with the display drivers in ESPHome. After troubleshooting in Arduino IDE and VSCode ESP-IDF, I decided to keep the project simple and use Grafana for visualization instead. If you're building this project and don't need a display, the basic ESP32-S3-DevKitC-1 is a more cost-effective option.
 
 ### Optional
-- **USB Power Supply** - 5V for ESP32
-- **Enclosure** - For protection and mounting
+- **[USB Power Supply](https://www.amazon.com/dp/B0C8HNK93Q)** - 5V for ESP32
+- **[Electrical Tape](https://www.amazon.com/Electrical-LYLTECH-Certification-Waterproof-Retardant/dp/B07TD8VR4D)** - For securely mounting the reed sensor
+- **Enclosure** - For protection and mounting, if desired
 
 ## 📦 Installation
 
@@ -100,7 +126,7 @@ For a more cost-effective build, consider using the same boards as the inspirati
 
 ### 2. Hardware Setup
 
-1. Connect the reed switch sensor to GPIO1 (INPUT_PULLUP)
+1. Connect the reed switch sensor to GPIO1 (default pin, configurable in YAML - see `reed_switch_pin` in substitutions)
 2. Divide your magnet bars into equal segments (I used 4 segments)
 3. Affix magnets evenly around the wheel's outer edge using double-sided tape
 4. Mount the reed switch sensor close to (but not touching) the magnets
@@ -110,7 +136,7 @@ For a more cost-effective build, consider using the same boards as the inspirati
 
 1. In Home Assistant, go to **Settings → Devices & Services → ESPHome**
 2. Click **Create New Device**
-3. Copy the contents of `catwheel.yaml` into the editor
+3. Copy the contents of `catwheel.yaml` (from the `ESPHome/` folder in this repository) into the editor
 4. Update the `secrets.yaml` with your WiFi credentials:
    ```yaml
    wifi_ssid: "Your WiFi SSID"
@@ -164,7 +190,7 @@ The easiest way to get started is to import the pre-built dashboard:
 
 1. Open Grafana (usually at `http://homeassistant.local:3000`)
 2. Go to **Dashboards → New → Import**
-3. Copy the contents of `catwheel-dashboard.json` from this repository
+3. Copy the contents of `catwheel-dashboard.json` (from the `grafana/` folder in this repository)
 4. Paste it into the "Import via panel json" field
 5. Click **Load**
 6. Select your InfluxDB data source
@@ -183,83 +209,16 @@ The dashboard includes:
 - Activity heatmap by time of day
 - Weekly session trends
 
-#### Manual Dashboard Creation
+### Automating Stat Resets
 
-If you prefer to create a dashboard from scratch:
+Daily, weekly, and monthly stats can be reset automatically using Home Assistant automations:
 
-1. Open Grafana (usually at `http://homeassistant.local:3000`)
-2. Ensure InfluxDB is added as a data source
-3. Create a new dashboard with the following panels:
+- **Daily Stats** - Reset automatically at midnight (built into ESPHome configuration)
+- **Weekly Stats** - Create an automation to press the "Reset Weekly Stats" button every Monday at midnight
+- **Monthly Stats** - Create a repeating calendar event for the 1st of each month at midnight, then create an automation triggered by that calendar event to press the "Reset Monthly Stats" button
 
-| Panel | Type | Purpose |
-|-------|------|---------|
-| Current Speed | Gauge | Real-time speed display |
-| Today's Distance | Stat | Today's total distance |
-| Avg Speed (24h) | Stat | Average speed last 24 hours |
-| Max Speed Record | Stat | Personal record |
-| Status | Stat | Current activity status |
-| Sessions Today | Stat | Running sessions today |
-| Total Miles | Stat | Lifetime distance |
-| Weekly Sessions | Stat | Sessions this week |
-| 7-Day Avg Distance | Stat | Average daily distance over 7 days |
-| Daily Avg | Stat | Alternative daily average |
-| Weekly Distance (7d) | Stat | Sum of past 7 days |
-| Monthly Distance (30d) | Stat | Sum of past 30 days |
-| Last Movement | Stat | Time since last activity |
-| Current Session | Stat | Live session duration |
-| Last Session Duration | Stat | Previous session length |
-| Longest Session | Stat | All-time record |
-| Speed Past 24 Hours | Time Series | Speed trends |
-| Daily Distance | Bar Chart | Distance per day |
-| Most Active Times | Bar Chart | Sessions by hour |
-| Fastest Times | Bar Chart | Avg speed by hour |
-| Activity Heatmap | Heatmap | Activity by time of day |
-| Sessions Per Day | Time Series | Daily session count |
+All automations can be set up using the Home Assistant UI under **Settings → Automations & Scenes**.
 
-#### Sample Grafana Queries
-
-**Current Speed:**
-```sql
-SELECT last("value") FROM "catwheel_speed_sensor" WHERE time > now() - 1h
-```
-
-**Daily Distance:**
-```sql
-SELECT last("value") FROM "catwheel_distance_today" WHERE time > now() - 24h
-```
-
-**Weekly Sessions:**
-```sql
-SELECT last("value") FROM "catwheel_sessions_today" 
-WHERE time > now() - 7d GROUP BY time(24h)
-```
-
-**Average Speed During Sessions:**
-```sql
-SELECT mean("value") FROM "catwheel_speed_sensor" 
-WHERE "value" > 0.45 AND time > now() - 24h
-```
-
-**Activity by Hour of Day:**
-```sql
-SELECT count("value") FROM "catwheel_cat_running" 
-WHERE "value" = 'true' AND time > now() - 30d 
-GROUP BY time(1h)
-```
-
-**Most Active Times (Sessions by Hour):**
-```sql
-SELECT count("value") FROM "state" 
-WHERE ("entity_id" = 'one_fast_cat_wheel_speedo_cat_running' AND "value" = 1) 
-AND $timeFilter GROUP BY time(1h)
-```
-
-**Fastest Times (Avg Speed by Hour):**
-```sql
-SELECT mean("value") FROM "mph" 
-WHERE "entity_id" = 'one_fast_cat_wheel_speedo_cat_wheel_speed' 
-AND "value" > 0.45 AND $timeFilter GROUP BY time(1h)
-```
 
 ## ⚙️ Configuration
 
