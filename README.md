@@ -10,6 +10,7 @@ A Home Assistant + ESPHome project to monitor your cat's exercise wheel activity
 - [Prerequisites](#-prerequisites)
 - [Hardware](#-hardware)
 - [Installation](#-installation)
+- [Automate Daily/Weekly/Monthly Stats Reset](#-automate-dailyweeklymonthly-stats-reset)
 - [Configuration](#-configuration)
 - [Troubleshooting](#-troubleshooting)
 - [Understanding the Data](#-understanding-the-data)
@@ -168,6 +169,16 @@ For a more cost-effective build, consider using the same boards as the inspirati
    - Reset Monthly Stats (button)
    - Reset All Stats (button)
 
+## 🔄 Automate Daily/Weekly/Monthly Stats Reset
+
+Daily, weekly, and monthly stats can be reset automatically using Home Assistant automations:
+
+- **Daily Stats** - Reset automatically at midnight (built into ESPHome configuration)
+- **Weekly Stats** - Create an automation to press the "Reset Weekly Stats" button every Monday at midnight
+- **Monthly Stats** - Create a repeating calendar event for the 1st of each month at midnight, then create an automation triggered by that calendar event to press the "Reset Monthly Stats" button
+
+All automations can be set up using the Home Assistant UI under **Settings → Automations & Scenes**.
+
 ### 5. (Optional) Configure InfluxDB
 
 If you want to use InfluxDB for data storage:
@@ -208,17 +219,6 @@ The dashboard includes:
 - Fastest times by hour (average speed)
 - Activity heatmap by time of day
 - Weekly session trends
-
-### Automating Stat Resets
-
-Daily, weekly, and monthly stats can be reset automatically using Home Assistant automations:
-
-- **Daily Stats** - Reset automatically at midnight (built into ESPHome configuration)
-- **Weekly Stats** - Create an automation to press the "Reset Weekly Stats" button every Monday at midnight
-- **Monthly Stats** - Create a repeating calendar event for the 1st of each month at midnight, then create an automation triggered by that calendar event to press the "Reset Monthly Stats" button
-
-All automations can be set up using the Home Assistant UI under **Settings → Automations & Scenes**.
-
 
 ## ⚙️ Configuration
 
